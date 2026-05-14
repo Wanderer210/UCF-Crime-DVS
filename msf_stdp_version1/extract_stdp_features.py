@@ -60,12 +60,12 @@ def main():
     print(f"[Info] feature dim: {model.out_dim}")
 
     for idx in tqdm(range(len(dataset)), desc="Extract STDP features"):
-        frames, path = dataset[idx]
+        path = dataset.get_path(idx)
         model.reset_state()
 
         feats = []
-        for t in range(frames.shape[0]):
-            x = frames[t:t+1].to(device, non_blocking=True)
+        for frame in dataset.iter_video_frames(idx):
+            x = frame.unsqueeze(0).to(device, non_blocking=True)
             feat, _ = model(x, learn_stdp=False)
             feats.append(feat.squeeze(0).detach().cpu().numpy())
 

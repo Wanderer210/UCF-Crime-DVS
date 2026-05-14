@@ -65,12 +65,12 @@ def main():
         running_rate1, running_rate2, n_steps = 0.0, 0.0, 0
 
         for idx in pbar:
-            frames, path = dataset[idx]
+            path = dataset.get_path(idx)
             model.reset_state()
 
-            # 逐帧在线 STDP，避免长视频显存爆炸
-            for t in range(frames.shape[0]):
-                x = frames[t:t+1].to(device, non_blocking=True)
+            # 流式逐帧读取，避免先把整段视频加载到 CPU 内存
+            for frame in dataset.iter_video_frames(idx):
+                x = frame.unsqueeze(0).to(device, non_blocking=True)
                 _, spikes = model(x, learn_stdp=True)
                 running_rate1 += float(spikes["rate1"].mean().item())
                 running_rate2 += float(spikes["rate2"].mean().item())
@@ -80,6 +80,7 @@ def main():
                 pbar.set_postfix({
                     "r1": f"{running_rate1/n_steps:.4f}",
                     "r2": f"{running_rate2/n_steps:.4f}",
+                    "file": Path(path).name,
                 })
 
     save_path = Path(args.save_path)

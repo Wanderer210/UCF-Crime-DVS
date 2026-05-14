@@ -1,5 +1,7 @@
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Iterator
+import shutil
+import zipfile
 
 import numpy as np
 import torch
@@ -24,11 +26,93 @@ def _load_npz(path: Path):
         return obj["event_frames"]
     if "arr_0" in obj:
         return obj["arr_0"]
-    # fallback: 取第一个数组
     keys = list(obj.keys())
     if not keys:
         raise ValueError(f"Empty npz: {path}")
     return obj[keys[0]]
+
+
+def _npz_member_name(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        names = [n for n in zf.namelist() if n.endswith(".npy")]
+    for name in ("frames.npy", "event_frames.npy", "arr_0.npy"):
+        if name in names:
+            return name
+    if not names:
+        raise ValueError(f"Empty npz: {path}")
+    raw_event_names = {"t.npy", "x.npy", "y.npy", "p.npy"}
+    if raw_event_names.issubset(set(names)):
+        raise ValueError(
+            f"Raw-event npz is not supported by EventFrameVideoDataset: {path}. "
+            "Please convert events to frame tensors first."
+        )
+    if len(names) == 1:
+        return names[0]
+    raise ValueError(
+        f"Cannot infer frame array key from npz members {names} in {path}. "
+        "Expected frames/event_frames/arr_0."
+    )
+
+
+def _materialize_npz_member(path: Path) -> Path:
+    member = _npz_member_name(path)
+    cache_file = path.parent / ".npz_cache" / path.stem / Path(member).name
+    if not cache_file.exists():
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(path) as zf, zf.open(member) as src, open(cache_file, "wb") as dst:
+            shutil.copyfileobj(src, dst, length=1024 * 1024)
+    return cache_file
+
+
+def _open_event_array_lazy(path: Path):
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        return np.load(path, mmap_mode="r", allow_pickle=True)
+    if suffix == ".npz":
+        return np.load(_materialize_npz_member(path), mmap_mode="r", allow_pickle=True)
+    return load_event_array(path).numpy()
+
+
+def _num_frames(arr) -> int:
+    if arr.ndim == 3:
+        return arr.shape[0]
+    if arr.ndim == 4:
+        if arr.shape[1] in (1, 2, 3, 4) or arr.shape[-1] in (1, 2, 3, 4):
+            return arr.shape[0]
+        if arr.shape[0] in (1, 2, 3, 4):
+            return arr.shape[1]
+    raise ValueError(f"Cannot infer event frame layout from shape {tuple(arr.shape)}")
+
+
+def _read_frame(arr, t: int) -> torch.Tensor:
+    if arr.ndim == 3:
+        x = torch.from_numpy(np.asarray(arr[t])).float().unsqueeze(0)
+    elif arr.ndim == 4 and arr.shape[1] in (1, 2, 3, 4):
+        x = torch.from_numpy(np.asarray(arr[t])).float()
+    elif arr.ndim == 4 and arr.shape[-1] in (1, 2, 3, 4):
+        x = torch.from_numpy(np.asarray(arr[t])).float().permute(2, 0, 1).contiguous()
+    elif arr.ndim == 4 and arr.shape[0] in (1, 2, 3, 4):
+        x = torch.from_numpy(np.asarray(arr[:, t])).float()
+    else:
+        raise ValueError(f"Cannot infer event frame layout from shape {tuple(arr.shape)}")
+    if x.shape[0] == 1:
+        x = torch.cat([x, torch.zeros_like(x)], dim=0)
+    elif x.shape[0] > 2:
+        x = x[:2]
+    return x
+
+
+def iter_event_frames(path: Path, image_size: int = 128, max_frames_per_video: int = 0, frame_stride: int = 1) -> Iterator[torch.Tensor]:
+    arr = _open_event_array_lazy(path)
+    total = _num_frames(arr)
+    stride = max(1, frame_stride)
+    stop = total if max_frames_per_video <= 0 else min(total, max_frames_per_video * stride)
+    for t in range(0, stop, stride):
+        yield preprocess_frames(
+            _read_frame(arr, t).unsqueeze(0),
+            image_size=image_size,
+            normalize=True,
+        ).squeeze(0)
 
 
 def load_event_array(path: Path) -> torch.Tensor:
@@ -150,13 +234,22 @@ class EventFrameVideoDataset(Dataset):
     def __len__(self):
         return len(self.files)
 
+    def get_path(self, idx) -> str:
+        return str(self.files[idx])
+
+    def iter_video_frames(self, idx) -> Iterator[torch.Tensor]:
+        path = self.files[idx]
+        yield from iter_event_frames(
+            path,
+            image_size=self.image_size,
+            max_frames_per_video=self.max_frames_per_video,
+            frame_stride=self.frame_stride,
+        )
+
     def __getitem__(self, idx):
         path = self.files[idx]
-        frames = load_event_array(path)  # [T,C,H,W]
-
-        frames = frames[::self.frame_stride]
-        if self.max_frames_per_video and self.max_frames_per_video > 0:
-            frames = frames[: self.max_frames_per_video]
-
-        frames = preprocess_frames(frames, image_size=self.image_size)
-        return frames, str(path)
+        raise RuntimeError(
+            "EventFrameVideoDataset no longer supports dense video loading via __getitem__(), "
+            f"which would load the whole video into memory: {path}. "
+            "Use get_path(idx) and iter_video_frames(idx) instead."
+        )
