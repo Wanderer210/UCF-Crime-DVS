@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+
+# Env
+.env
+.venv/
+venv/
+conda-meta/
+
+# Logs
+*.log
+nohup.out
+runs/
+wandb/
+tensorboard/
+
+# Dataset / large files
+data/
+dataset/
+datasets/
+Dataset/
+Datasets/
+EventFrame/
+event_frame/
+event_frames/
+RawEvent/
+raw_event/
+raw_events/
+NpzEvent/
+npz_event/
+features/
+feature/
+features_stdp/
+pretrained_features/
+
+# Checkpoints / weights
+checkpoints/
+checkpoint/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Results
+results/
+outputs/
+output/
+figures_out/
+feature_hardvs.zip
+
+# Large feature files
+feature_hardvs/
+feature_hardvs.zip
+features/
+features_stdp/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.zip
